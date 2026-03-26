@@ -2,18 +2,20 @@ import os
 import logging
 import json
 import sys
-from functools import lru_cache
+from typing import Dict
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import chromadb
 import httpx
-from keras.utils import load_img, img_to_array
-from keras.applications import ResNet152
-from keras.applications.resnet import preprocess_input
-from keras.layers import GlobalMaxPooling2D
-from keras import Sequential
+import torch
+import timm
+from PIL import Image
 import numpy as np
 import io
 from slowapi.errors import RateLimitExceeded
@@ -77,38 +79,41 @@ class HealthResponse(BaseModel):
     collections: dict
 
 
-# --- Rate Limiting ---
+# --- Rate Limiting & App Setup ---
 limiter = Limiter(key_func=get_remote_address)
-
-# --- App Setup ---
 app = FastAPI(title="AirbnbLens Beast Engine", version="3.0")
 app.state.limiter = limiter
 
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return HTTPException(
-        status_code=429,
-        detail=f"Rate limit exceeded: {exc.detail}",
-    ).__call__(request)
+    return JSONResponse(
+        status_code=429, content={"detail": f"Rate limit exceeded: {exc.detail}"}
+    )
 
 
-ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:3000",
-]
+# --- CORS ---
+def get_allowed_origins() -> list[str]:
+    env_origins = os.getenv("ALLOWED_ORIGINS", "")
+    if env_origins:
+        return [origin.strip() for origin in env_origins.split(",") if origin.strip()]
+    return ["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000"]
+
+
+ALLOWED_ORIGINS = get_allowed_origins()
+logger.info(f"CORS: {ALLOWED_ORIGINS}")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
-MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
 
 # --- Hugging Face Query Augmentation ---
 HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
@@ -116,35 +121,22 @@ HF_API_URL = (
     "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
 )
 HF_ENABLED = bool(HF_API_TOKEN) and HF_API_TOKEN != "hf_your_token_here"
+logger.info(f"HF augmentation: {'enabled' if HF_ENABLED else 'disabled'}")
 
-if HF_ENABLED:
-    logger.info("Hugging Face query augmentation enabled")
-else:
-    logger.info("Hugging Face token not found - augmentation disabled")
-
-
-@lru_cache(maxsize=128)
-def _cached_augmentation(query: str) -> str:
-    """Cache HF augmentation results so identical queries don't hit the API twice."""
-    return ""  # placeholder, actual call is async
+_augmentation_cache: Dict[str, str] = {}
 
 
 async def augment_query_with_hf(user_query: str) -> str:
-    """Use Mistral-7B to expand a short query into rich aesthetic keywords."""
     if not HF_ENABLED:
         return user_query
-
-    cached = _cached_augmentation(user_query)
-    if cached:
-        return cached
-
+    if user_query in _augmentation_cache:
+        return _augmentation_cache[user_query]
     prompt = (
         "[INST] You are an interior design AI. Extract the aesthetic intent from "
         "this phrase and return exactly 5 highly descriptive visual keywords "
         "separated by commas. Do not add any conversational text.\n"
         f"Phrase: '{user_query}' [/INST]"
     )
-
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             response = await client.post(
@@ -152,93 +144,80 @@ async def augment_query_with_hf(user_query: str) -> str:
                 headers={"Authorization": f"Bearer {HF_API_TOKEN}"},
                 json={"inputs": prompt, "parameters": {"max_new_tokens": 50}},
             )
-
         if response.status_code != 200:
-            logger.warning(f"HF API returned {response.status_code}")
             return user_query
-
         data = response.json()
         if isinstance(data, list) and len(data) > 0:
-            generated = data[0].get("generated_text", "")
-            # Strip the prompt from the response to get just the keywords
-            expanded = generated.replace(prompt, "").strip()
+            expanded = data[0].get("generated_text", "").replace(prompt, "").strip()
             if expanded:
-                logger.info(f"Augmented '{user_query}' -> '{expanded}'")
+                _augmentation_cache[user_query] = expanded
                 return expanded
-
-    except Exception as e:
-        logger.warning(f"HF augmentation failed: {e}")
-
+    except Exception:
+        pass
     return user_query
 
 
-# --- ChromaDB Connection ---
+# --- ChromaDB ---
+CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
 try:
     client = chromadb.PersistentClient(
-        path="./chroma_db", settings=chromadb.Settings(anonymized_telemetry=False)
+        path=CHROMA_DB_PATH, settings=chromadb.Settings(anonymized_telemetry=False)
     )
-    logger.info("ChromaDB connected")
+    logger.info(f"ChromaDB connected at {CHROMA_DB_PATH}")
 except Exception as e:
-    logger.error(f"Could not connect to ChromaDB: {e}")
+    logger.error(f"ChromaDB error: {e}")
     client = None
 
 image_collection = None
 meta_collection = None
-
 if client:
     try:
         image_collection = client.get_or_create_collection(name="airbnb_visuals")
         meta_collection = client.get_or_create_collection(name="airbnb_metadata")
         logger.info(
-            f"Collections loaded: visuals={image_collection.count()}, metadata={meta_collection.count()}"
+            f"Collections: visuals={image_collection.count()}, metadata={meta_collection.count()}"
         )
     except Exception as e:
-        logger.error(f"Error accessing collections: {e}")
+        logger.error(f"Collections error: {e}")
 
-# --- Model Loading ---
-logger.info("Loading ResNet152...")
+
+# --- PyTorch ResNet152 via timm ---
+logger.info("Loading ResNet152 via timm...")
 try:
-    base_model = ResNet152(
-        weights="imagenet", include_top=False, input_shape=(224, 224, 3)
-    )
-    base_model.trainable = False
-    model_image = Sequential([base_model, GlobalMaxPooling2D()])
+    model_image = timm.create_model("resnet152", pretrained=True, num_classes=0)
+    model_image.eval()
+    data_config = timm.data.resolve_model_data_config(model_image)
+    preprocess = timm.data.create_transform(**data_config, is_training=False)
     logger.info("ResNet152 loaded successfully")
 except Exception as e:
-    logger.error(f"Failed to load model: {e}")
+    logger.error(f"Model load failed: {e}")
     model_image = None
+    preprocess = None
 
 
-# --- Response Cache (LRU) ---
-@lru_cache(maxsize=256)
-def _cached_text_query(query: str, city: str | None, limit: int) -> tuple:
-    """Cache text search results. Returns tuple for hashability."""
-    where_filter = {"city": city} if city else None
-    results = meta_collection.query(
-        query_texts=[query], n_results=limit, where=where_filter
-    )
-    if not results or not results.get("metadatas"):
-        return ()
-    return tuple(tuple(sorted(m.items())) for m in results["metadatas"][0])
+def extract_features(img_bytes: bytes) -> list[float]:
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    img_tensor = preprocess(img).unsqueeze(0)
+    with torch.no_grad():
+        features = model_image(img_tensor)
+    return features.flatten().tolist()
 
 
-def _tuple_to_dicts(cached: tuple) -> list[dict]:
-    return [dict(t) for t in cached]
+# --- Cache ---
+_text_cache: Dict[str, list] = {}
 
 
 # --- Endpoints ---
 @app.get("/health", response_model=HealthResponse)
 def health():
-    img_count = image_collection.count() if image_collection else 0
-    meta_count = meta_collection.count() if meta_collection else 0
     return HealthResponse(
         status="healthy",
         model_loaded=model_image is not None,
         db_connected=client is not None,
         hf_available=HF_ENABLED,
         collections={
-            "airbnb_visuals": img_count,
-            "airbnb_metadata": meta_count,
+            "airbnb_visuals": image_collection.count() if image_collection else 0,
+            "airbnb_metadata": meta_collection.count() if meta_collection else 0,
         },
     )
 
@@ -249,29 +228,22 @@ async def search_image(
     request: Request, file: UploadFile = File(...), city: str | None = None
 ):
     if image_collection is None:
-        raise HTTPException(status_code=503, detail="Vector index not connected.")
+        raise HTTPException(503, "Vector index not connected.")
     if model_image is None:
-        raise HTTPException(status_code=503, detail="ML model not loaded.")
-
+        raise HTTPException(503, "ML model not loaded.")
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type: {file.content_type}. Allowed: {', '.join(ALLOWED_IMAGE_TYPES)}",
+            400, f"Invalid file type. Allowed: {', '.join(ALLOWED_IMAGE_TYPES)}"
         )
 
     try:
         content = await file.read()
         if len(content) > MAX_UPLOAD_SIZE:
-            raise HTTPException(status_code=413, detail="File too large. Max 10MB.")
+            raise HTTPException(413, "File too large. Max 10MB.")
         if len(content) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded.")
+            raise HTTPException(400, "Empty file.")
 
-        img = load_img(io.BytesIO(content), target_size=(224, 224))
-        img_array = img_to_array(img)
-        expanded = np.expand_dims(img_array, axis=0)
-        preprocessed = preprocess_input(expanded)
-        query_vector = model_image.predict(preprocessed).flatten().tolist()
-
+        query_vector = extract_features(content)
         where_filter = {"city": city} if city else None
         results = image_collection.query(
             query_embeddings=[query_vector], n_results=50, where=where_filter
@@ -280,13 +252,13 @@ async def search_image(
         if not results or not results.get("metadatas") or not results["metadatas"][0]:
             return SearchResponse(results=[])
 
-        logger.info(f"Image search returned {len(results['metadatas'][0])} results")
+        logger.info(f"Image search: {len(results['metadatas'][0])} results")
         return SearchResponse(results=results["metadatas"][0])
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Image search failed")
-        raise HTTPException(status_code=500, detail="Image processing failed.")
+        raise HTTPException(500, "Image processing failed.")
 
 
 @app.get("/search/text", response_model=SearchResponse)
@@ -303,30 +275,27 @@ async def search_text(
     if not query:
         return SearchResponse(results=[])
     if meta_collection is None:
-        raise HTTPException(status_code=503, detail="Metadata server not connected.")
+        raise HTTPException(503, "Metadata not connected.")
     if limit < 1 or limit > 500:
         limit = 50
 
     try:
-        # Augment query with HF LLM
         expanded = await augment_query_with_hf(query)
         search_term = expanded if expanded != query else query
 
-        # Try cache first
-        city_key = city or ""
-        cached = _cached_text_query(search_term, city_key, limit)
-        if cached:
-            logger.info(f"Cache hit for query='{search_term}' city='{city_key}'")
+        cache_key = f"{search_term}:{city or ''}:{limit}"
+        if cache_key in _text_cache:
             return SearchResponse(
                 query=query,
                 expanded_query=expanded if expanded != query else None,
-                results=_tuple_to_dicts(cached),
+                results=_text_cache[cache_key],
             )
 
         where_filter = {"city": city} if city else None
         results = meta_collection.query(
             query_texts=[search_term], n_results=limit, where=where_filter
         )
+
         if not results or not results.get("metadatas") or not results["metadatas"][0]:
             return SearchResponse(
                 query=query,
@@ -336,7 +305,7 @@ async def search_text(
 
         items = results["metadatas"][0]
 
-        # Price filtering
+        # Price filter
         if price_min is not None or price_max is not None:
             filtered = []
             for item in items:
@@ -351,20 +320,16 @@ async def search_text(
                         continue
                     if price_max and price > price_max:
                         continue
-                    filtered.append(item)
                 except (ValueError, TypeError):
-                    filtered.append(item)  # keep if price unparseable
+                    pass
+                filtered.append(item)
             items = filtered
 
-        # Rank by rating (higher rated first), then by review count
-        def sort_key(item):
-            rating = item.get("rating") or 0
-            reviews = item.get("reviews") or 0
-            return (-rating, -reviews)
+        # Sort by rating
+        items.sort(key=lambda x: (-(x.get("rating") or 0), -(x.get("reviews") or 0)))
 
-        items.sort(key=sort_key)
-
-        logger.info(f"Text search '{search_term}' returned {len(items)} results")
+        _text_cache[cache_key] = items
+        logger.info(f"Text search '{search_term}': {len(items)} results")
         return SearchResponse(
             query=query,
             expanded_query=expanded if expanded != query else None,
@@ -372,9 +337,9 @@ async def search_text(
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Text search failed")
-        raise HTTPException(status_code=500, detail="Search failed.")
+        raise HTTPException(500, "Search failed.")
 
 
 @app.get("/search/similar", response_model=SearchResponse)
@@ -382,10 +347,8 @@ async def search_text(
 async def search_similar(
     request: Request, listing_id: str, target_city: str | None = None
 ):
-    """Find aesthetic twins in other cities (The Style Migration Feature)"""
     if image_collection is None:
-        raise HTTPException(status_code=503, detail="Vector index not connected.")
-
+        raise HTTPException(503, "Vector index not connected.")
     try:
         try:
             listing = image_collection.get(
@@ -399,10 +362,8 @@ async def search_similar(
                 )
                 if results and results.get("metadatas") and results["metadatas"][0]:
                     return SearchResponse(results=results["metadatas"][0])
-        except Exception as query_exc:
-            logger.warning(
-                f"Image collection lookup failed for {listing_id}: {query_exc}"
-            )
+        except Exception:
+            pass
 
         if meta_collection:
             meta_listing = meta_collection.get(ids=[listing_id], include=["metadatas"])
@@ -417,12 +378,14 @@ async def search_similar(
         return SearchResponse(results=[])
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Similarity search failed")
-        raise HTTPException(status_code=500, detail="Similarity search failed.")
+    except Exception:
+        logger.exception("Similar search failed")
+        raise HTTPException(500, "Similarity search failed.")
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "0.0.0.0")
+    uvicorn.run(app, host=host, port=port)

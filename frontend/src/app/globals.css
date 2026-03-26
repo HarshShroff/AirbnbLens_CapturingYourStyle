@@ -1,43 +1,149 @@
 @import "tailwindcss";
 
 @theme {
+  /* Warm cohesive palette - coral + cream + terracotta */
   --color-primary: #FF5A5F;
-  --color-secondary: #00A699;
-  --color-accent: #FC642D;
-  --color-airbnb-background: #F7F7F7;
-  --color-airbnb-surface: #FFFFFF;
+  --color-primary-dark: #E04E52;
+  --color-secondary: #D4A574;
+  --color-accent: #C17F59;
+  --color-warm-cream: #FDF8F4;
+  --color-warm-sand: #F5EDE6;
+  --color-charcoal: #1A1A1A;
+  --color-slate: #2D3436;
+  --color-muted: #6B7280;
+
+  /* Font families */
+  --font-body: var(--font-body), 'DM Sans', system-ui, sans-serif;
+  --font-display: var(--font-display), 'Fraunces', Georgia, serif;
 }
 
 :root {
-  --background: #F7F7F7;
-  --foreground: #222222;
+  --background: #FDF8F4;
+  --foreground: #1A1A1A;
   --radius: 12px;
 }
 
 body {
   background-color: var(--background);
   color: var(--foreground);
-  font-family: 'Inter', sans-serif;
+  font-family: var(--font-body);
   margin: 0;
   padding: 0;
 }
 
+/* Display font utility */
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-body {
+  font-family: var(--font-body);
+}
+
+/* Noise texture overlay for depth */
+.noise-texture {
+  position: relative;
+}
+
+.noise-texture::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Grain overlay for hero sections */
+.grain-overlay {
+  position: relative;
+}
+
+.grain-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='grain'%3E%3CfeTurbulence type='turbulence' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23grain)' opacity='0.4'/%3E%3C/svg%3E");
+  opacity: 0.15;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  z-index: 2;
+}
+
 .glassmorphism {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .lens-glow {
-  box-shadow: 0 0 15px rgba(255, 90, 95, 0.4);
+  box-shadow: 0 0 20px rgba(255, 90, 95, 0.35), 0 0 40px rgba(255, 90, 95, 0.15);
 }
 
 .card-hover {
-  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .card-hover:hover {
-  transform: translateY(-5px) scale(1.02);
-  box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08), 0 8px 16px rgba(0, 0, 0, 0.06);
+}
+
+/* Warm gradient backgrounds */
+.warm-gradient {
+  background: linear-gradient(135deg, #FDF8F4 0%, #F5EDE6 50%, #FDF8F4 100%);
+}
+
+.hero-gradient {
+  background: linear-gradient(
+    135deg,
+    rgba(26, 26, 26, 0.7) 0%,
+    rgba(26, 26, 26, 0.4) 40%,
+    rgba(45, 52, 54, 0.5) 100%
+  );
+}
+
+/* Custom scrollbar */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Selection color */
+::selection {
+  background-color: rgba(255, 90, 95, 0.2);
+  color: #1A1A1A;
+}
+
+/* Focus states */
+:focus-visible {
+  outline: 2px solid #FF5A5F;
+  outline-offset: 2px;
+}
+
+/* Skeleton loading animation */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #F5EDE6 25%, #FDF8F4 50%, #F5EDE6 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
 }

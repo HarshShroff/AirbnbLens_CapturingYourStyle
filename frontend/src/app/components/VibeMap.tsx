@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -16,28 +16,30 @@ L.Icon.Default.mergeOptions({
 const vibeIcon = new L.DivIcon({
   className: 'vibe-marker',
   html: `<div style="
-    width: 24px; height: 24px; border-radius: 50%;
-    background: #FF5A5F; border: 2.5px solid white;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-    transition: transform 0.2s;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: linear-gradient(135deg, #FF5A5F 0%, #E04E52 100%);
+    border: 3px solid white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    transition: all 0.2s ease;
   "></div>`,
-  iconSize: [24, 24],
-  iconAnchor: [12, 12],
-  popupAnchor: [0, -14],
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+  popupAnchor: [0, -16],
 });
 
 const highlightedIcon = new L.DivIcon({
   className: 'vibe-marker-highlighted',
   html: `<div style="
-    width: 32px; height: 32px; border-radius: 50%;
-    background: #FF5A5F; border: 3px solid white;
-    box-shadow: 0 0 0 4px rgba(255,90,95,0.3), 0 4px 12px rgba(0,0,0,0.3);
-    transform: scale(1.2);
-    transition: transform 0.2s;
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, #FF5A5F 0%, #E04E52 100%);
+    border: 3.5px solid white;
+    box-shadow: 0 0 0 5px rgba(255,90,95,0.25), 0 4px 16px rgba(0,0,0,0.3);
+    transform: scale(1.1);
+    transition: all 0.2s ease;
   "></div>`,
-  iconSize: [32, 32],
-  iconAnchor: [16, 16],
-  popupAnchor: [0, -18],
+  iconSize: [36, 36],
+  iconAnchor: [18, 18],
+  popupAnchor: [0, -20],
 });
 
 interface VibeMapProps {
@@ -47,7 +49,7 @@ interface VibeMapProps {
 
 function FitBounds({ listings }: { listings: Listing[] }) {
   const map = useMap();
-  React.useEffect(() => {
+  useEffect(() => {
     const coords = listings
       .filter((l) => l.latitude && l.longitude && l.latitude !== 0)
       .map((l) => [l.latitude!, l.longitude!] as [number, number]);
@@ -56,7 +58,7 @@ function FitBounds({ listings }: { listings: Listing[] }) {
       map.setView(coords[0], 13);
     } else {
       const bounds = L.latLngBounds(coords);
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
     }
   }, [listings, map]);
   return null;
@@ -73,11 +75,18 @@ const VibeMap = ({ listings, highlightedId }: VibeMapProps) => {
     : [39.8283, -98.5795];
 
   return (
-    <div className="w-full h-full relative">
-      <MapContainer center={center} zoom={11} scrollWheelZoom style={{ height: '100%', width: '100%' }}>
+    <div className="w-full h-full relative bg-[#F5EDE6]">
+      <MapContainer
+        center={center}
+        zoom={11}
+        scrollWheelZoom
+        style={{ height: '100%', width: '100%' }}
+        className="z-0"
+      >
+        {/* Carto Positron - Modern, clean map style */}
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
         />
         <FitBounds listings={geoListings} />
         {geoListings.map((listing) => (
@@ -87,27 +96,50 @@ const VibeMap = ({ listings, highlightedId }: VibeMapProps) => {
             icon={highlightedId === listing.id ? highlightedIcon : vibeIcon}
           >
             <Popup>
-              <div className="w-44">
-                <img
-                  src={listing.picture_url}
-                  alt={listing.name}
-                  className="w-full h-20 object-cover rounded-lg mb-1.5"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1540518614846-7eded433c457?w=400';
-                  }}
-                />
-                <p className="font-semibold text-xs truncate">{listing.name}</p>
-                <p className="text-[10px] text-gray-500">{listing.neighborhood}</p>
-                <p className="text-xs font-bold mt-0.5">{listing.price} <span className="font-normal text-gray-400">night</span></p>
+              <div className="w-48 font-body">
+                <div className="relative w-full h-24 rounded-lg overflow-hidden mb-2 bg-[#F5EDE6]">
+                  {/* Using standard img since Leaflet popups don't support Next Image well */}
+                  <img
+                    src={listing.picture_url}
+                    alt={listing.name}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1540518614846-7eded433c457?w=400';
+                    }}
+                  />
+                </div>
+                <p className="font-semibold text-sm text-[#1A1A1A] truncate">{listing.name}</p>
+                <p className="text-[11px] text-[#6B7280] mt-0.5">{listing.neighborhood}</p>
+                {listing.rating && listing.rating > 0 && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <svg className="w-3 h-3 text-[#FF5A5F]" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                    </svg>
+                    <span className="text-[11px] font-medium text-[#1A1A1A]">{listing.rating.toFixed(1)}</span>
+                  </div>
+                )}
+                <div className="flex items-baseline gap-1 mt-2 pt-2 border-t border-[#D4A574]/20">
+                  <span className="text-sm font-bold text-[#1A1A1A]">{listing.price}</span>
+                  <span className="text-[11px] text-[#6B7280]">night</span>
+                </div>
               </div>
             </Popup>
           </Marker>
         ))}
       </MapContainer>
 
+      {/* Empty State */}
       {geoListings.length === 0 && (
-        <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-[1000]">
-          <p className="text-gray-400 text-sm font-medium">No map data for these results</p>
+        <div className="absolute inset-0 bg-[#FDF8F4]/90 backdrop-blur-sm flex flex-col items-center justify-center z-[1000]">
+          <div className="w-16 h-16 rounded-full bg-[#F5EDE6] flex items-center justify-center mb-4">
+            <svg className="w-8 h-8 text-[#D4A574]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </div>
+          <p className="text-[#6B7280] text-sm font-medium">No location data available</p>
+          <p className="text-[#9CA3AF] text-xs mt-1">Try a different search</p>
         </div>
       )}
     </div>
